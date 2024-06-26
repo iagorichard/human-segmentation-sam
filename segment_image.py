@@ -4,10 +4,10 @@ from segment_anything import SamPredictor, sam_model_registry
 
 # Escolher o modelo
 model_type = "vit_h"  # Pode ser "vit_h", "vit_l", "vit_b"
-sam_checkpoint = f'{model_type}_checkpoint.pth'
+sam_checkpoint = f'checkpoints/sam_{model_type}_4b8939.pth'
 
 # Carregar a imagem
-image_path = 'path_to_your_image.jpg'
+image_path = 'in/example.jpg'
 image = cv2.imread(image_path)
 
 # Carregar o modelo SAM
