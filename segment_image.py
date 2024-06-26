@@ -7,6 +7,8 @@ from torchvision import models
 from torchvision.transforms import functional as F
 import argparse
 import sys
+import json
+import os
 
 def load_model():
     """
@@ -23,37 +25,9 @@ def preprocess_image(image, device):
     Pre-processa a imagem para o modelo.
     """
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    input_image = F.to_tensor(image_rgb).to(device)
+    input_image = torchvision.transforms.functional.to_tensor(image_rgb).to(device)
     input_image = input_image.unsqueeze(0)
     return image_rgb, input_image
-
-def segment_image(model, input_image):
-    """
-    Realiza a segmentação da imagem usando o modelo.
-    """
-    with torch.no_grad():
-        output = model(input_image)['out'][0]
-    output_predictions = output.argmax(0)
-    return output_predictions
-
-def apply_mask(image_rgb, output_predictions):
-    """
-    Aplica a máscara de segmentação à imagem original e gera a máscara binária.
-    """
-    person_mask = output_predictions == 15
-    person_mask = person_mask.byte().cpu().numpy()
-    person_mask = cv2.resize(person_mask, (image_rgb.shape[1], image_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-    segmented_image = image_rgb.copy()
-    segmented_image[~person_mask.astype(bool)] = 0
-
-    binary_mask = (person_mask * 255).astype(np.uint8)
-    
-    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contour_mask = np.zeros_like(binary_mask)
-    cv2.drawContours(contour_mask, contours, -1, (255), thickness=1)
-
-    return segmented_image, binary_mask, contour_mask
 
 def save_and_show_image(image_rgb, segmented_image, binary_mask, contour_mask, output_path='segmented_people.jpg'):
     """
@@ -87,8 +61,9 @@ def process_image(image_path):
     image = cv2.imread(image_path)
     image_rgb, input_image = preprocess_image(image, device)
     output_predictions = segment_image(model, input_image)
-    segmented_image, binary_mask, contour_mask = apply_mask(image_rgb, output_predictions)
+    segmented_image, binary_mask, contour_mask, contours = apply_mask(image_rgb, output_predictions)
     save_and_show_image(image_rgb, segmented_image, binary_mask, contour_mask)
+    return contours
 
 def process_video(video_path):
     model, device = load_model()
@@ -98,36 +73,24 @@ def process_video(video_path):
         print("Error: Could not open video.")
         sys.exit()
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
+        frame_idx += 1
 
         image_rgb, input_image = preprocess_image(frame, device)
         output_predictions = segment_image(model, input_image)
-        segmented_image, binary_mask, contour_mask = apply_mask(image_rgb, output_predictions)
+        segmented_image, binary_mask, contour_mask, contours = apply_mask(image_rgb, output_predictions)
 
-        fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+        combined_frame = np.hstack((cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR), segmented_image, cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR), cv2.cvtColor(contour_mask, cv2.COLOR_GRAY2BGR)))
 
-        axs[0].imshow(image_rgb)
-        axs[0].set_title('Original Image')
-        axs[0].axis('off')
-
-        axs[1].imshow(segmented_image)
-        axs[1].set_title('Segmented Image')
-        axs[1].axis('off')
-
-        axs[2].imshow(binary_mask, cmap='gray')
-        axs[2].set_title('Binary Mask')
-        axs[2].axis('off')
-
-        axs[3].imshow(contour_mask, cmap='gray')
-        axs[3].set_title('Contour Mask')
-        axs[3].axis('off')
-
-        plt.tight_layout()
-        plt.pause(0.001)
-        plt.draw()
+        progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
+        cv2.putText(combined_frame, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.imshow('Segmented Video', combined_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -135,8 +98,44 @@ def process_video(video_path):
     cap.release()
     cv2.destroyAllWindows()
 
+def segment_image(model, input_image):
+    """
+    Realiza a segmentação da imagem usando o modelo.
+    """
+    with torch.no_grad():
+        output = model(input_image)['out'][0]
+    output_predictions = output.argmax(0)
+    return output_predictions
+
+def apply_mask(image_rgb, output_predictions):
+    """
+    Aplica a máscara de segmentação à imagem original e gera a máscara binária.
+    """
+    person_mask = output_predictions == 15
+    person_mask = person_mask.byte().cpu().numpy()
+    person_mask = cv2.resize(person_mask, (image_rgb.shape[1], image_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    segmented_image = image_rgb.copy()
+    segmented_image[~person_mask.astype(bool)] = 0
+
+    binary_mask = (person_mask * 255).astype(np.uint8)
+    
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_mask = np.zeros_like(binary_mask)
+    cv2.drawContours(contour_mask, contours, -1, (255), thickness=1)
+
+    return segmented_image, binary_mask, contour_mask, contours
+
 def crop_img(img, init_point, end_point):
     return img[init_point[0]:end_point[0], init_point[1]:end_point[1], :]
+
+def display_progress(frame_idx, total_frames, window_name):
+    """
+    Display the progress on the frame and terminal.
+    """
+    progress_text = f"Frame {frame_idx} de {total_frames}"
+    print(progress_text, end='\r')
+    return progress_text
 
 def process_supervideo(supervideo_path):
     model, device = load_model()
@@ -146,10 +145,17 @@ def process_supervideo(supervideo_path):
         print("Error: Could not open supervideo.")
         sys.exit()
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Dictionary to store contours for each subimage
+    contours_dict = {os.path.basename(supervideo_path): {"subimage_1": [], "subimage_2": [], "subimage_3": [], "subimage_4": []}}
+
+    frame_idx = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
+        frame_idx += 1
 
         imgs = [
             crop_img(frame, (0, 0), (720, 1280)),
@@ -158,38 +164,40 @@ def process_supervideo(supervideo_path):
             crop_img(frame, (780, 1320), (1500, 2600))
         ]
 
-        fig, axs = plt.subplots(len(imgs), 4, figsize=(20, 20))
+        combined_frame = np.zeros((1500, 2600, 3), dtype=np.uint8)  # Placeholder for combined frame
 
         for i, img in enumerate(imgs):
             image_rgb, input_image = preprocess_image(img, device)
             output_predictions = segment_image(model, input_image)
-            segmented_image, binary_mask, contour_mask = apply_mask(image_rgb, output_predictions)
+            segmented_image, binary_mask, contour_mask, contours = apply_mask(image_rgb, output_predictions)
 
-            axs[i, 0].imshow(image_rgb)
-            axs[i, 0].set_title(f'Original Image {i+1}')
-            axs[i, 0].axis('off')
+            # Store contours in the dictionary
+            subimage_key = f"subimage_{i+1}"
+            contours_dict[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contours])
 
-            axs[i, 1].imshow(segmented_image)
-            axs[i, 1].set_title(f'Segmented Image {i+1}')
-            axs[i, 1].axis('off')
+            y_offset = 720 * (i // 2)
+            x_offset = 1280 * (i % 2)
 
-            axs[i, 2].imshow(binary_mask, cmap='gray')
-            axs[i, 2].set_title(f'Binary Mask {i+1}')
-            axs[i, 2].axis('off')
+            combined_frame[y_offset:y_offset+img.shape[0], x_offset:x_offset+img.shape[1]] = cv2.cvtColor(segmented_image, cv2.COLOR_RGB2BGR)
 
-            axs[i, 3].imshow(contour_mask, cmap='gray')
-            axs[i, 3].set_title(f'Contour Mask {i+1}')
-            axs[i, 3].axis('off')
+            # Overlay contour mask
+            combined_frame[y_offset:y_offset+img.shape[0], x_offset:x_offset+img.shape[1]][contour_mask > 0] = [0, 255, 0]
 
-        plt.tight_layout()
-        plt.pause(0.001)
-        plt.draw()
+        progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
+        cv2.putText(combined_frame, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.imshow('Segmented Video', combined_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
+
+    # Save contours to a JSON file
+    output_json_path = os.path.join('out', os.path.basename(supervideo_path) + '.json')
+    os.makedirs('out', exist_ok=True)
+    with open(output_json_path, 'w') as f:
+        json.dump(contours_dict, f)
 
 def main(image_path=None, video_path=None, supervideo_path=None):
     if ((image_path is None and video_path is None and supervideo_path is None) or
