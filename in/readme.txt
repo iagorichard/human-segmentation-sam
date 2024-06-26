@@ -1,0 +1,1 @@
+In this folder plase put images and videos to be processed!!

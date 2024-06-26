@@ -1,1 +1,1 @@
-Here put the checkpoint file
+In this folder please put the checkpoint file!!
