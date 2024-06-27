@@ -9,6 +9,9 @@ import argparse
 import sys
 import json
 import os
+import glob
+
+
 
 def load_model():
     """
@@ -137,13 +140,16 @@ def display_progress(frame_idx, total_frames, window_name):
     print(progress_text, end='\r')
     return progress_text
 
-def process_supervideo(supervideo_path):
+def process_supervideo(supervideo_path, output_json_path):
+    """
+    Processa um supervídeo e salva os contornos em um arquivo JSON.
+    """
     model, device = load_model()
     cap = cv2.VideoCapture(supervideo_path)
 
     if not cap.isOpened():
         print("Error: Could not open supervideo.")
-        sys.exit()
+        return
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
@@ -194,16 +200,34 @@ def process_supervideo(supervideo_path):
     cv2.destroyAllWindows()
 
     # Save contours to a JSON file
-    output_json_path = os.path.join('out', os.path.basename(supervideo_path) + '.json')
-    os.makedirs('out', exist_ok=True)
+    os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
     with open(output_json_path, 'w') as f:
         json.dump(contours_dict, f)
 
-def main(image_path=None, video_path=None, supervideo_path=None):
-    if ((image_path is None and video_path is None and supervideo_path is None) or
-        (image_path is not None and (video_path is not None or supervideo_path is not None)) or
-        (video_path is not None and supervideo_path is not None)):
-        print("Error: You must specify either an image_path, a video_path, or a supervideo_path, but not multiple.")
+def process_supervideos_in_directory(directory_path):
+    """
+    Processa todos os supervídeos em um diretório e suas subpastas.
+    """
+    supervideo_paths = glob.glob(os.path.join(directory_path, '**', '*.mkv'), recursive=True)
+
+    for supervideo_path in supervideo_paths:
+        # Parse the path to create the JSON output path
+        path_parts = supervideo_path.split(os.sep)
+        subject_id = path_parts[-3]  # subjectX
+        activity_id = path_parts[-2]  # activity1 or activity2
+        routine_id = path_parts[-1].split('.')[0]  # routine0X
+
+        json_filename = f"{subject_id}_{activity_id}_{routine_id}.json"
+        output_json_path = os.path.join('out', json_filename)
+
+        process_supervideo(supervideo_path, output_json_path)
+
+def main(image_path=None, video_path=None, supervideo_path=None, supervideo_superpath=None):
+    if ((image_path is None and video_path is None and supervideo_path is None and supervideo_superpath is None) or
+        (image_path is not None and (video_path is not None or supervideo_path is not None or supervideo_superpath is not None)) or
+        (video_path is not None and (supervideo_path is not None or supervideo_superpath is not None)) or
+        (supervideo_path is not None and supervideo_superpath is not None)):
+        print("Error: You must specify either an image_path, a video_path, a supervideo_path, or a supervideo_superpath, but not multiple.")
         sys.exit()
 
     if image_path:
@@ -211,12 +235,18 @@ def main(image_path=None, video_path=None, supervideo_path=None):
     elif video_path:
         process_video(video_path)
     elif supervideo_path:
-        process_supervideo(supervideo_path)
+        output_json_path = os.path.join('out', os.path.basename(supervideo_path) + '.json')
+        process_supervideo(supervideo_path, output_json_path)
+    elif supervideo_superpath:
+        process_supervideos_in_directory(supervideo_superpath)
 
 if __name__ == '__main__':
+    print(torch.device("cuda" if torch.cuda.is_available() else "cpu"), "ta na mao")
+
     parser = argparse.ArgumentParser(description="Segmentação de pessoas usando DeepLabv3+")
     parser.add_argument('--image_path', type=str, help="Caminho para a imagem de entrada")
     parser.add_argument('--video_path', type=str, help="Caminho para o vídeo de entrada")
     parser.add_argument('--supervideo_path', type=str, help="Caminho para o supervídeo de entrada")
+    parser.add_argument('--supervideo_superpath', type=str, help="Caminho para o diretório contendo supervídeos")
     args = parser.parse_args()
-    main(args.image_path, args.video_path, args.supervideo_path)
+    main(args.image_path, args.video_path, args.supervideo_path, args.supervideo_superpath)
