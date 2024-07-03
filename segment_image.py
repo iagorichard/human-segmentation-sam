@@ -1,3 +1,5 @@
+import tkinter as tk
+from tkinter import filedialog
 import torch
 import torchvision
 import cv2
@@ -116,7 +118,6 @@ def apply_mask(image_rgb, output_predictions):
     """
     person_mask = output_predictions == 15
     person_mask = person_mask.byte().cpu().numpy()
-    person_mask = cv2.resize(person_mask, (image_rgb.shape[1], image_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
 
     segmented_image = image_rgb.copy()
     segmented_image[~person_mask.astype(bool)] = 0
@@ -127,7 +128,13 @@ def apply_mask(image_rgb, output_predictions):
     contour_mask = np.zeros_like(binary_mask)
     cv2.drawContours(contour_mask, contours, -1, (255), thickness=1)
 
-    return segmented_image, binary_mask, contour_mask, contours
+    # Redimensionar a imagem segmentada e a máscara binária para 256x256
+    segmented_image_resized = cv2.resize(segmented_image, (256, 256), interpolation=cv2.INTER_LINEAR)
+    binary_mask_resized = cv2.resize(binary_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
+    contour_mask_resized = cv2.resize(contour_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
+
+    return segmented_image_resized, binary_mask_resized, contour_mask_resized, contours
+
 
 def crop_img(img, init_point, end_point):
     return img[init_point[0]:end_point[0], init_point[1]:end_point[1], :]
@@ -181,13 +188,13 @@ def process_supervideo(supervideo_path, output_json_path):
             subimage_key = f"subimage_{i+1}"
             contours_dict[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contours])
 
-            y_offset = 720 * (i // 2)
-            x_offset = 1280 * (i % 2)
+            y_offset = 256 * (i // 2)
+            x_offset = 256 * (i % 2)
 
-            combined_frame[y_offset:y_offset+img.shape[0], x_offset:x_offset+img.shape[1]] = cv2.cvtColor(segmented_image, cv2.COLOR_RGB2BGR)
+            combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]] = cv2.cvtColor(segmented_image, cv2.COLOR_RGB2BGR)
 
             # Overlay contour mask
-            combined_frame[y_offset:y_offset+img.shape[0], x_offset:x_offset+img.shape[1]][contour_mask > 0] = [0, 255, 0]
+            combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]][contour_mask > 0] = [0, 255, 0]
 
         progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
         cv2.putText(combined_frame, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
@@ -240,6 +247,49 @@ def main(image_path=None, video_path=None, supervideo_path=None, supervideo_supe
     elif supervideo_superpath:
         process_supervideos_in_directory(supervideo_superpath)
 
+def open_file_dialog(file_type):
+    root = tk.Tk()
+    root.withdraw()
+    if file_type == "image":
+        return filedialog.askopenfilename(title="Select an Image", filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
+    elif file_type == "video":
+        return filedialog.askopenfilename(title="Select a Video", filetypes=[("Video files", "*.mp4;*.mkv;*.avi")])
+    elif file_type == "supervideo":
+        return filedialog.askopenfilename(title="Select a Supervideo", filetypes=[("Supervideo files", "*.mkv")])
+    elif file_type == "supervideo_path":
+        return filedialog.askdirectory(title="Select Directory Containing Supervideos")
+    else:
+        return None
+
+def run_gui():
+    def on_select(event):
+        file_type = combo.get()
+        path = open_file_dialog(file_type)
+        if path:
+            root.quit()
+            root.destroy()
+            if file_type == "image":
+                main(image_path=path)
+            elif file_type == "video":
+                main(video_path=path)
+            elif file_type == "supervideo":
+                main(supervideo_path=path)
+            elif file_type == "supervideo_path":
+                main(supervideo_superpath=path)
+
+    root = tk.Tk()
+    root.title("Select Input Type")
+
+    label = tk.Label(root, text="Select input type:")
+    label.pack(pady=10)
+
+    combo = tk.StringVar()
+    options = ["image", "video", "supervideo", "supervideo_path"]
+    select = tk.OptionMenu(root, combo, *options, command=on_select)
+    select.pack(pady=10)
+
+    root.mainloop()
+
 if __name__ == '__main__':
     print(torch.device("cuda" if torch.cuda.is_available() else "cpu"), "ta na mao")
 
@@ -249,4 +299,8 @@ if __name__ == '__main__':
     parser.add_argument('--supervideo_path', type=str, help="Caminho para o supervídeo de entrada")
     parser.add_argument('--supervideo_superpath', type=str, help="Caminho para o diretório contendo supervídeos")
     args = parser.parse_args()
-    main(args.image_path, args.video_path, args.supervideo_path, args.supervideo_superpath)
+
+    if not any([args.image_path, args.video_path, args.supervideo_path, args.supervideo_superpath]):
+        run_gui()
+    else:
+        main(args.image_path, args.video_path, args.supervideo_path, args.supervideo_superpath)
