@@ -177,12 +177,23 @@ def plot_points_on_image(img, points_list):
     return img_copy
 
 def joint_points(img, points):
+    """
+    Gera uma imagem binária com os pontos conectados por linhas e retorna os contornos dessa imagem.
+    """
     img_copy = np.zeros_like(img)
     for i in range(len(points) - 1):
         pt1 = points[i]
         pt2 = points[i + 1]
-        cv2.line(img_copy, pt1, pt2, (1, 1, 1), 10)
-    return img_copy
+        cv2.line(img_copy, pt1, pt2, (255, 255, 255), 10)
+    
+    # Converte a imagem para escala de cinza e aplica threshold para binarização
+    gray = cv2.cvtColor(img_copy, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
+    
+    # Encontra os contornos na imagem binária
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    return contours
 
 def apply_segmentation_mask(image, mask):
     image_np = np.array(image)
@@ -227,10 +238,8 @@ def process_supervideo(supervideo_path, output_json_path):
             break
         frame_idx += 1
         
-        #desabilitar apos testes
-        if frame_idx ==30:
-            cap.release()
-            cv2.destroyAllWindows()
+        if frame_idx == 100:  # Limite para testes, pode ser removido
+            break
 
         imgs = [
             crop_img(frame, (0, 0), (720, 1280)),
@@ -238,8 +247,6 @@ def process_supervideo(supervideo_path, output_json_path):
             crop_img(frame, (780, 0), (1500, 1280)),
             crop_img(frame, (780, 1320), (1500, 2600))
         ]
-
-        combined_frame = np.zeros((512, 512, 3), dtype=np.uint8)  # Placeholder for combined frame
 
         for i, img in enumerate(imgs):
             subimage_key = f"subimage_{i+1}"
@@ -253,18 +260,11 @@ def process_supervideo(supervideo_path, output_json_path):
             # Robot processing
             points = predict_points(models_dict[subimage_key], img)
             contour_mask_robot = joint_points(img, points)
-            segmented_image_robot = plot_points_on_image(image_rgb, points)
-            contours_dict_robot[os.path.basename(supervideo_path)][subimage_key].append(points)
+            contours_dict_robot[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contour_mask_robot])
             
-            y_offset = 256 * (i // 2)
-            x_offset = 256 * (i % 2)
-
-            combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]] = cv2.cvtColor(segmented_image, cv2.COLOR_RGB2BGR)
-            combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]][contour_mask > 0] = [0, 255, 0]
-
         progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
-        cv2.putText(combined_frame, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.imshow('Segmented Video', combined_frame)
+        cv2.putText(segmented_image, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.imshow('Segmented Video', segmented_image)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -280,6 +280,8 @@ def process_supervideo(supervideo_path, output_json_path):
     output_json_path_robot = output_json_path.replace('.json', '_robot.json')
     with open(output_json_path_robot, 'w') as f:
         json.dump(contours_dict_robot, f)
+
+
 
 def process_supervideos_in_directory(directory_path):
     """
