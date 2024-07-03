@@ -238,8 +238,8 @@ def process_supervideo(supervideo_path, output_json_path):
             break
         frame_idx += 1
         
-        if frame_idx == 100:  # Limite para testes, pode ser removido
-            break
+        #if frame_idx == 100:  # Limite para testes, pode ser removido
+        #    break
 
         imgs = [
             crop_img(frame, (0, 0), (720, 1280)),
@@ -363,7 +363,7 @@ def run_gui():
     root.mainloop()
 
 if __name__ == '__main__':
-    print(torch.device("cuda" if torch.cuda.is_available() else "cpu"), "ta na mao")
+    print(torch.device("cuda" if torch.cuda.is_available() else "cpu"), "processor")
 
     parser = argparse.ArgumentParser(description="Segmentação de pessoas usando DeepLabv3+")
     parser.add_argument('--image_path', type=str, help="Caminho para a imagem de entrada")
