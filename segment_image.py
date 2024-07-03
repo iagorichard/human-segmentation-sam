@@ -12,6 +12,7 @@ import sys
 import json
 import os
 import glob
+from models import ModelGenerator
 
 
 
@@ -150,6 +151,46 @@ def display_progress(frame_idx, total_frames, window_name):
     print(progress_text, end='\r')
     return progress_text
 
+
+# Funções para o processamento do robô
+def preprocess(pil_img):
+    img_nd = np.array(cv2.resize(pil_img, (256, 256)))
+    if len(img_nd.shape) == 2:
+        img_nd = np.expand_dims(img_nd, axis=2)
+    img_trans = img_nd.transpose((2, 0, 1))
+    if img_trans.max() > 1:
+        img_trans = img_trans / 255
+    return torch.from_numpy(img_trans).type(torch.FloatTensor).unsqueeze(0).cuda()
+
+def predict_points(model, img):
+    data = preprocess(img)
+    points = model(data)
+    points = [int(p*256) for p in points.tolist()[0]]
+    points = [(points[i], points[i+1]) for i in range(0,len(points),2)]
+    return points
+
+def plot_points_on_image(img, points_list):
+    img_copy = img.copy()
+    for point in points_list:
+        x, y = point
+        cv2.circle(img_copy, (x, y), 3, (0, 255, 0), -1)
+    return img_copy
+
+def joint_points(img, points):
+    img_copy = np.zeros_like(img)
+    for i in range(len(points) - 1):
+        pt1 = points[i]
+        pt2 = points[i + 1]
+        cv2.line(img_copy, pt1, pt2, (1, 1, 1), 10)
+    return img_copy
+
+def apply_segmentation_mask(image, mask):
+    image_np = np.array(image)
+    mask_np = np.array(mask)
+    masked_image = np.where(mask_np == 1, image_np, 0)
+    return masked_image
+
+
 def process_supervideo(supervideo_path, output_json_path):
     """
     Processa um supervídeo e salva os contornos em um arquivo JSON.
@@ -164,7 +205,20 @@ def process_supervideo(supervideo_path, output_json_path):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Dictionary to store contours for each subimage
-    contours_dict = {os.path.basename(supervideo_path): {"subimage_1": [], "subimage_2": [], "subimage_3": [], "subimage_4": []}}
+    contours_dict_human = {os.path.basename(supervideo_path): {"subimage_1": [], "subimage_2": [], "subimage_3": [], "subimage_4": []}}
+    contours_dict_robot = {os.path.basename(supervideo_path): {"subimage_1": [], "subimage_2": [], "subimage_3": [], "subimage_4": []}}
+    
+    # Load robot models for each subimage
+    models_dict = {
+        "subimage_1": ModelGenerator.get_dl_model("squeezenet", True, device),
+        "subimage_2": ModelGenerator.get_dl_model("squeezenet", True, device),
+        "subimage_3": ModelGenerator.get_dl_model("squeezenet", True, device),
+        "subimage_4": ModelGenerator.get_dl_model("squeezenet", True, device),
+    }
+    models_dict["subimage_1"].load_state_dict(torch.load('checkpoints/cam1/CP_epoch4653.pth', map_location=device))
+    models_dict["subimage_2"].load_state_dict(torch.load('checkpoints/cam2/CP_epoch4438.pth', map_location=device))
+    models_dict["subimage_3"].load_state_dict(torch.load('checkpoints/cam3/CP_epoch4910.pth', map_location=device))
+    models_dict["subimage_4"].load_state_dict(torch.load('checkpoints/cam4/CP_epoch2884.pth', map_location=device))
 
     frame_idx = 0
     while cap.isOpened():
@@ -173,7 +227,8 @@ def process_supervideo(supervideo_path, output_json_path):
             break
         frame_idx += 1
         
-        if frame_idx ==10:
+        #desabilitar apos testes
+        if frame_idx ==30:
             cap.release()
             cv2.destroyAllWindows()
 
@@ -187,20 +242,24 @@ def process_supervideo(supervideo_path, output_json_path):
         combined_frame = np.zeros((512, 512, 3), dtype=np.uint8)  # Placeholder for combined frame
 
         for i, img in enumerate(imgs):
+            subimage_key = f"subimage_{i+1}"
             image_rgb, input_image = preprocess_image(img, device)
+            
+            # Human processing
             output_predictions = segment_image(model, input_image)
             segmented_image, binary_mask, contour_mask, contours = apply_mask(image_rgb, output_predictions)
+            contours_dict_human[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contours])
 
-            # Store contours in the dictionary
-            subimage_key = f"subimage_{i+1}"
-            contours_dict[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contours])
-
+            # Robot processing
+            points = predict_points(models_dict[subimage_key], img)
+            contour_mask_robot = joint_points(img, points)
+            segmented_image_robot = plot_points_on_image(image_rgb, points)
+            contours_dict_robot[os.path.basename(supervideo_path)][subimage_key].append(points)
+            
             y_offset = 256 * (i // 2)
             x_offset = 256 * (i % 2)
 
             combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]] = cv2.cvtColor(segmented_image, cv2.COLOR_RGB2BGR)
-
-            # Overlay contour mask
             combined_frame[y_offset:y_offset+segmented_image.shape[0], x_offset:x_offset+segmented_image.shape[1]][contour_mask > 0] = [0, 255, 0]
 
         progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
@@ -213,10 +272,14 @@ def process_supervideo(supervideo_path, output_json_path):
     cap.release()
     cv2.destroyAllWindows()
 
-    # Save contours to a JSON file
+    # Save contours to JSON files
     os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
     with open(output_json_path, 'w') as f:
-        json.dump(contours_dict, f)
+        json.dump(contours_dict_human, f)
+
+    output_json_path_robot = output_json_path.replace('.json', '_robot.json')
+    with open(output_json_path_robot, 'w') as f:
+        json.dump(contours_dict_robot, f)
 
 def process_supervideos_in_directory(directory_path):
     """
