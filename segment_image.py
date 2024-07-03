@@ -123,17 +123,20 @@ def apply_mask(image_rgb, output_predictions):
     segmented_image[~person_mask.astype(bool)] = 0
 
     binary_mask = (person_mask * 255).astype(np.uint8)
-    
-    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contour_mask = np.zeros_like(binary_mask)
-    cv2.drawContours(contour_mask, contours, -1, (255), thickness=1)
 
-    # Redimensionar a imagem segmentada e a máscara binária para 256x256
-    segmented_image_resized = cv2.resize(segmented_image, (256, 256), interpolation=cv2.INTER_LINEAR)
+    # Redimensionar a máscara binária para 256x256
     binary_mask_resized = cv2.resize(binary_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
-    contour_mask_resized = cv2.resize(contour_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
+
+    # Calcular os contornos a partir da máscara redimensionada
+    contours, _ = cv2.findContours(binary_mask_resized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_mask_resized = np.zeros_like(binary_mask_resized)
+    cv2.drawContours(contour_mask_resized, contours, -1, (255), thickness=1)
+
+    # Redimensionar a imagem segmentada para 256x256
+    segmented_image_resized = cv2.resize(segmented_image, (256, 256), interpolation=cv2.INTER_LINEAR)
 
     return segmented_image_resized, binary_mask_resized, contour_mask_resized, contours
+
 
 
 def crop_img(img, init_point, end_point):
@@ -169,6 +172,10 @@ def process_supervideo(supervideo_path, output_json_path):
         if not ret:
             break
         frame_idx += 1
+        
+        if frame_idx ==10:
+            cap.release()
+            cv2.destroyAllWindows()
 
         imgs = [
             crop_img(frame, (0, 0), (720, 1280)),
@@ -177,7 +184,7 @@ def process_supervideo(supervideo_path, output_json_path):
             crop_img(frame, (780, 1320), (1500, 2600))
         ]
 
-        combined_frame = np.zeros((1500, 2600, 3), dtype=np.uint8)  # Placeholder for combined frame
+        combined_frame = np.zeros((512, 512, 3), dtype=np.uint8)  # Placeholder for combined frame
 
         for i, img in enumerate(imgs):
             image_rgb, input_image = preprocess_image(img, device)
