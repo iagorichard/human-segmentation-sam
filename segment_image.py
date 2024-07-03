@@ -237,9 +237,9 @@ def process_supervideo(supervideo_path, output_json_path):
         if not ret:
             break
         frame_idx += 1
-        
-        #if frame_idx == 100:  # Limite para testes, pode ser removido
-        #    break
+
+        if frame_idx == 100:  # Limite para testes, pode ser removido
+            break
 
         imgs = [
             crop_img(frame, (0, 0), (720, 1280)),
@@ -247,6 +247,8 @@ def process_supervideo(supervideo_path, output_json_path):
             crop_img(frame, (780, 0), (1500, 1280)),
             crop_img(frame, (780, 1320), (1500, 2600))
         ]
+
+        combined_frame = np.zeros((512, 512, 3), dtype=np.uint8)  # Placeholder for combined frame
 
         for i, img in enumerate(imgs):
             subimage_key = f"subimage_{i+1}"
@@ -259,12 +261,23 @@ def process_supervideo(supervideo_path, output_json_path):
 
             # Robot processing
             points = predict_points(models_dict[subimage_key], img)
-            contour_mask_robot = joint_points(img, points)
-            contours_dict_robot[os.path.basename(supervideo_path)][subimage_key].append([c.tolist() for c in contour_mask_robot])
+            contours_robot = joint_points(img, points)
+            contours_dict_robot[os.path.basename(supervideo_path)][subimage_key].append([contour.tolist() for contour in contours_robot])
             
+            y_offset = 256 * (i // 2)
+            x_offset = 256 * (i % 2)
+            img_resized = cv2.resize(img, (256, 256), interpolation=cv2.INTER_LINEAR)
+            combined_frame[y_offset:y_offset+256, x_offset:x_offset+256] = img_resized
+
+            # Overlay human and robot contours on the resized image
+            for contour in contours:
+                cv2.drawContours(combined_frame[y_offset:y_offset+256, x_offset:x_offset+256], [np.array(contour, dtype=np.int32)], -1, (0, 255, 0), 2)
+            for contour in contours_robot:
+                cv2.drawContours(combined_frame[y_offset:y_offset+256, x_offset:x_offset+256], [np.array(contour, dtype=np.int32)], -1, (255, 0, 0), 2)
+
         progress_text = display_progress(frame_idx, total_frames, "Segmented Video")
-        cv2.putText(segmented_image, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.imshow('Segmented Video', segmented_image)
+        cv2.putText(combined_frame, progress_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.imshow('Segmented Video', combined_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
